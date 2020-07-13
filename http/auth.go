@@ -1,6 +1,7 @@
 package http
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
@@ -15,9 +16,16 @@ import (
 	verifier "github.com/okta/okta-jwt-verifier-golang"
 )
 
+type key string
+
 const (
-	sessionName       = "okta-session"
-	sessionIDTokenKey = "id_token"
+	// IDTokenKey is the key used for id_token in session store and context injection
+	IDTokenKey key = "id_token"
+
+	sessionName                  = "okta-session"
+	sessionIDTokenKey     string = string(IDTokenKey)
+	sessionAccessTokenKey string = "access_token"
+	sessionNonceKey       string = "nonce"
 )
 
 // ErrorWriter is a function that is used to write error responses.
@@ -45,18 +53,30 @@ func NewAuthHandler(sessionKey []byte, clientID, clientSecret, issuer, redirectU
 	}
 }
 
-func (h *AuthHandler) isAuthenticated(r *http.Request) bool {
+func (h *AuthHandler) isAuthenticated(r *http.Request) (bool, *verifier.Jwt) {
 	session, err := h.sessionStore.Get(r, sessionName)
-	if err != nil || session.Values[sessionIDTokenKey] == nil || session.Values[sessionIDTokenKey] == "" {
-		return false
+	if err != nil ||
+		session.Values[sessionIDTokenKey] == nil || session.Values[sessionIDTokenKey] == "" ||
+		session.Values[sessionNonceKey] == nil || session.Values[sessionNonceKey] == "" {
+		return false, nil
 	}
-	return true
+
+	nonce, _ := session.Values[sessionNonceKey].(string)
+	idToken, _ := session.Values[sessionIDTokenKey].(string)
+
+	token, err := h.verifyToken(idToken, nonce)
+	if err != nil {
+		return false, nil
+	}
+
+	return true, token
 }
 
 // Ensure wraps an http.Handler and ensure the routes are authed via okta.
 func (h *AuthHandler) Ensure(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if h.isAuthenticated(r) {
+		if isAuthenticated, token := h.isAuthenticated(r); isAuthenticated {
+			r = r.WithContext(context.WithValue(r.Context(), IDTokenKey, token))
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -83,7 +103,7 @@ func (h *AuthHandler) Ensure(next http.Handler) http.Handler {
 			return
 		}
 
-		session.Values["nonce"] = nonce
+		session.Values[sessionNonceKey] = nonce
 		err = session.Save(r, w)
 		if err != nil {
 			h.errorWriter(w, r, err, http.StatusInternalServerError)
@@ -117,7 +137,7 @@ func (h *AuthHandler) AuthCodeCallbackHandler(w http.ResponseWriter, r *http.Req
 
 	var nonce string
 	// treat missing or invalid nonce as ""
-	value := session.Values["nonce"]
+	value := session.Values[sessionNonceKey]
 	nonce, _ = value.(string)
 	_, err = h.verifyToken(exchange.IDToken, nonce)
 	if err != nil {
@@ -125,8 +145,8 @@ func (h *AuthHandler) AuthCodeCallbackHandler(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	session.Values["id_token"] = exchange.IDToken
-	session.Values["access_token"] = exchange.AccessToken
+	session.Values[sessionIDTokenKey] = exchange.IDToken
+	session.Values[sessionAccessTokenKey] = exchange.AccessToken
 	err = session.Save(r, w)
 	if err != nil {
 		h.errorWriter(w, r, err, http.StatusInternalServerError)
