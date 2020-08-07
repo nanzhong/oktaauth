@@ -11,12 +11,10 @@ import (
 	"log"
 	"net/http"
 	"strings"
-	"time"
 
 	"github.com/google/uuid"
 	"github.com/gorilla/sessions"
 	verifier "github.com/okta/okta-jwt-verifier-golang"
-	"github.com/patrickmn/go-cache"
 )
 
 type key string
@@ -25,11 +23,11 @@ const (
 	// IDTokenKey is the key used for id_token in session store and context injection
 	IDTokenKey key = "id_token"
 
-	sessionName                  = "okta-session"
-	sessionIDTokenKey     string = string(IDTokenKey)
-	sessionAccessTokenKey string = "access_token"
-	sessionNonceKey       string = "nonce"
-	stateExpiration              = 5 * time.Minute
+	sessionName                   = "okta-session"
+	sessionIDTokenKey      string = string(IDTokenKey)
+	sessionAccessTokenKey  string = "access_token"
+	sessionNonceKey        string = "nonce"
+	sessionRedirectPathKey string = "redirect_path"
 )
 
 // ErrorWriter is a function that is used to write error responses.
@@ -44,21 +42,18 @@ type AuthHandler struct {
 	redirectURI  string
 	appendPath   bool
 	errorWriter  ErrorWriter
-
-	redirectURIstate *cache.Cache
 }
 
 // NewAuthHandler constructs a new Okta OAuth handler.
 func NewAuthHandler(sessionKey []byte, clientID, clientSecret, issuer, redirectURI string, appendPath bool, errorWriter func(w http.ResponseWriter, r *http.Request, err error, status int)) *AuthHandler {
 	return &AuthHandler{
-		sessionStore:     sessions.NewCookieStore(sessionKey),
-		clientID:         clientID,
-		clientSecret:     clientSecret,
-		issuer:           issuer,
-		errorWriter:      errorWriter,
-		redirectURI:      redirectURI,
-		appendPath:       appendPath,
-		redirectURIstate: cache.New(stateExpiration, stateExpiration),
+		sessionStore: sessions.NewCookieStore(sessionKey),
+		clientID:     clientID,
+		clientSecret: clientSecret,
+		issuer:       issuer,
+		errorWriter:  errorWriter,
+		redirectURI:  redirectURI,
+		appendPath:   appendPath,
 	}
 }
 
@@ -97,24 +92,23 @@ func (h *AuthHandler) Ensure(next http.Handler) http.Handler {
 			return
 		}
 
-		state := uuid.New().String()
-		if h.appendPath {
-			h.redirectURIstate.Set(state, r.URL.Path, 0)
-		}
-
 		q := r.URL.Query()
 		q.Add("client_id", h.clientID)
 		q.Add("response_type", "code")
 		q.Add("response_mode", "query")
 		q.Add("scope", "openid profile email")
 		q.Add("redirect_uri", h.redirectURI)
-		q.Add("state", state)
+		q.Add("state", uuid.New().String())
 		q.Add("nonce", nonce)
 
 		session, err := h.sessionStore.Get(r, sessionName)
 		if err != nil {
 			h.errorWriter(w, r, err, http.StatusInternalServerError)
 			return
+		}
+
+		if h.appendPath {
+			session.Values[sessionRedirectPathKey] = r.URL.Path
 		}
 
 		session.Values[sessionNonceKey] = nonce
@@ -159,23 +153,19 @@ func (h *AuthHandler) AuthCodeCallbackHandler(w http.ResponseWriter, r *http.Req
 		return
 	}
 
+	path := "/"
+	if p, ok := session.Values[sessionRedirectPathKey]; ok {
+		pp, _ := p.(string)
+		path = "/" + strings.TrimLeft(pp, "/")
+		delete(session.Values, sessionRedirectPathKey)
+	}
+
 	session.Values[sessionIDTokenKey] = exchange.IDToken
 	session.Values[sessionAccessTokenKey] = exchange.AccessToken
 	err = session.Save(r, w)
 	if err != nil {
 		h.errorWriter(w, r, err, http.StatusInternalServerError)
 		return
-	}
-
-	path := "/"
-	state := r.URL.Query().Get("state")
-	if state != "" {
-		if p, ok := h.redirectURIstate.Get(state); ok {
-			if pp, ok := p.(string); ok {
-				path = "/" + strings.TrimLeft(pp, "/")
-			}
-			h.redirectURIstate.Delete(state)
-		}
 	}
 
 	http.Redirect(w, r, path, http.StatusFound)
