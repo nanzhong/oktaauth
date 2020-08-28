@@ -10,6 +10,7 @@ import (
 	"io/ioutil"
 	"log"
 	"net/http"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/gorilla/sessions"
@@ -22,10 +23,11 @@ const (
 	// IDTokenKey is the key used for id_token in session store and context injection
 	IDTokenKey key = "id_token"
 
-	sessionName                  = "okta-session"
-	sessionIDTokenKey     string = string(IDTokenKey)
-	sessionAccessTokenKey string = "access_token"
-	sessionNonceKey       string = "nonce"
+	sessionName                   = "okta-session"
+	sessionIDTokenKey      string = string(IDTokenKey)
+	sessionAccessTokenKey  string = "access_token"
+	sessionNonceKey        string = "nonce"
+	sessionRedirectPathKey string = "redirect_path"
 )
 
 // ErrorWriter is a function that is used to write error responses.
@@ -38,11 +40,12 @@ type AuthHandler struct {
 	clientSecret string
 	issuer       string
 	redirectURI  string
+	appendPath   bool
 	errorWriter  ErrorWriter
 }
 
 // NewAuthHandler constructs a new Okta OAuth handler.
-func NewAuthHandler(sessionKey []byte, clientID, clientSecret, issuer, redirectURI string, errorWriter func(w http.ResponseWriter, r *http.Request, err error, status int)) *AuthHandler {
+func NewAuthHandler(sessionKey []byte, clientID, clientSecret, issuer, redirectURI string, appendPath bool, errorWriter func(w http.ResponseWriter, r *http.Request, err error, status int)) *AuthHandler {
 	return &AuthHandler{
 		sessionStore: sessions.NewCookieStore(sessionKey),
 		clientID:     clientID,
@@ -50,6 +53,7 @@ func NewAuthHandler(sessionKey []byte, clientID, clientSecret, issuer, redirectU
 		issuer:       issuer,
 		errorWriter:  errorWriter,
 		redirectURI:  redirectURI,
+		appendPath:   appendPath,
 	}
 }
 
@@ -103,6 +107,10 @@ func (h *AuthHandler) Ensure(next http.Handler) http.Handler {
 			return
 		}
 
+		if h.appendPath {
+			session.Values[sessionRedirectPathKey] = r.URL.Path
+		}
+
 		session.Values[sessionNonceKey] = nonce
 		err = session.Save(r, w)
 		if err != nil {
@@ -145,6 +153,13 @@ func (h *AuthHandler) AuthCodeCallbackHandler(w http.ResponseWriter, r *http.Req
 		return
 	}
 
+	path := "/"
+	if p, ok := session.Values[sessionRedirectPathKey]; ok {
+		pp, _ := p.(string)
+		path = "/" + strings.TrimLeft(pp, "/")
+		delete(session.Values, sessionRedirectPathKey)
+	}
+
 	session.Values[sessionIDTokenKey] = exchange.IDToken
 	session.Values[sessionAccessTokenKey] = exchange.AccessToken
 	err = session.Save(r, w)
@@ -153,7 +168,7 @@ func (h *AuthHandler) AuthCodeCallbackHandler(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	http.Redirect(w, r, "/", http.StatusFound)
+	http.Redirect(w, r, path, http.StatusFound)
 }
 
 func generateNonce() (string, error) {
