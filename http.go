@@ -84,6 +84,11 @@ func NewAuthHandler(sessionKey []byte, clientID, clientSecret, issuer, redirectU
 	return h
 }
 
+// ConfigureErrorWriter allows configuring an error writer for an existing AuthHandler.
+func (h *AuthHandler) ConfigureErrorWriter(w ErrorWriter) {
+	h.errorWriter = w
+}
+
 func (h *AuthHandler) isAuthenticated(r *http.Request) (bool, *verifier.Jwt) {
 	session, err := h.sessionStore.Get(r, sessionName)
 	if err != nil ||
