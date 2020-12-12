@@ -33,6 +33,23 @@ const (
 // ErrorWriter is a function that is used to write error responses.
 type ErrorWriter func(w http.ResponseWriter, r *http.Request, err error, status int)
 
+// Option is a function for configuring an AuthHandler.
+type Option func(h *AuthHandler)
+
+// WithErrorWriter is an Option for configuring a custom error writer.
+func WithErrorWriter(w ErrorWriter) Option {
+	return func(h *AuthHandler) {
+		h.errorWriter = w
+	}
+}
+
+// WithPreservePath is an Option for configuring preserving path after login.
+func WithPreservePath(p bool) Option {
+	return func(h *AuthHandler) {
+		h.preservePath = p
+	}
+}
+
 // AuthHandler manages okta based authentication.
 type AuthHandler struct {
 	sessionStore *sessions.CookieStore
@@ -40,21 +57,31 @@ type AuthHandler struct {
 	clientSecret string
 	issuer       string
 	redirectURI  string
-	appendPath   bool
+	preservePath bool
 	errorWriter  ErrorWriter
 }
 
 // NewAuthHandler constructs a new Okta OAuth handler.
-func NewAuthHandler(sessionKey []byte, clientID, clientSecret, issuer, redirectURI string, appendPath bool, errorWriter func(w http.ResponseWriter, r *http.Request, err error, status int)) *AuthHandler {
-	return &AuthHandler{
+func NewAuthHandler(sessionKey []byte, clientID, clientSecret, issuer, redirectURI string, opts ...Option) *AuthHandler {
+	h := &AuthHandler{
 		sessionStore: sessions.NewCookieStore(sessionKey),
 		clientID:     clientID,
 		clientSecret: clientSecret,
 		issuer:       issuer,
-		errorWriter:  errorWriter,
 		redirectURI:  redirectURI,
-		appendPath:   appendPath,
+
+		// Defaults.
+		errorWriter: func(w http.ResponseWriter, r *http.Request, err error, status int) {
+			w.WriteHeader(status)
+			fmt.Fprintf(w, "%d: %s", status, err)
+		},
+		preservePath: true,
 	}
+
+	for _, opt := range opts {
+		opt(h)
+	}
+	return h
 }
 
 func (h *AuthHandler) isAuthenticated(r *http.Request) (bool, *verifier.Jwt) {
@@ -107,7 +134,7 @@ func (h *AuthHandler) Ensure(next http.Handler) http.Handler {
 			return
 		}
 
-		if h.appendPath {
+		if h.preservePath {
 			session.Values[sessionRedirectPathKey] = r.URL.Path
 		}
 
