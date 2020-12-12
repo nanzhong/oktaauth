@@ -61,8 +61,28 @@ type AuthHandler struct {
 	errorWriter  ErrorWriter
 }
 
+// ErrInvalidConfig is the error that will be wrapped and returned when a new
+// AuthHandler is attempted to be created with invalid configuration.
+var ErrInvalidConfig = errors.New("invalid okta configuration")
+
 // NewAuthHandler constructs a new Okta OAuth handler.
-func NewAuthHandler(sessionKey []byte, clientID, clientSecret, issuer, redirectURI string, opts ...Option) *AuthHandler {
+func NewAuthHandler(sessionKey []byte, clientID, clientSecret, issuer, redirectURI string, opts ...Option) (*AuthHandler, error) {
+	if len(sessionKey) == 0 {
+		return nil, fmt.Errorf("missing session key: %w", ErrInvalidConfig)
+	}
+	if len(clientID) == 0 {
+		return nil, fmt.Errorf("missing client id: %w", ErrInvalidConfig)
+	}
+	if len(clientSecret) == 0 {
+		return nil, fmt.Errorf("missing client secret: %w", ErrInvalidConfig)
+	}
+	if len(issuer) == 0 {
+		return nil, fmt.Errorf("missing issuer: %w", ErrInvalidConfig)
+	}
+	if len(redirectURI) == 0 {
+		return nil, fmt.Errorf("missing redirect uri: %w", ErrInvalidConfig)
+	}
+
 	h := &AuthHandler{
 		sessionStore: sessions.NewCookieStore(sessionKey),
 		clientID:     clientID,
@@ -81,7 +101,7 @@ func NewAuthHandler(sessionKey []byte, clientID, clientSecret, issuer, redirectU
 	for _, opt := range opts {
 		opt(h)
 	}
-	return h
+	return h, nil
 }
 
 // ConfigureErrorWriter allows configuring an error writer for an existing AuthHandler.
