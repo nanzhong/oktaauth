@@ -8,6 +8,8 @@ This handler is an easy way to put Okta OAuth in front of endpoints.
 
 ```go
 
+import "github.com/nanzhong/oktaauth"
+
 var (
     sessionKey   []byte
     clientID     string
@@ -20,7 +22,7 @@ var (
 
 // ...
 
-oaHandler := NewAuthHandler(sessionKey, clientID, clientSecret, issuer, redirectURI, WithPreservePath(true), WithErrorWriter(errorWriter))
+oaHandler := oktaauth.NewAuthHandler(sessionKey, clientID, clientSecret, issuer, redirectURI, WithPreservePath(true), WithErrorWriter(errorWriter))
 http.HandleFunc("/oauth/callback", oaHandler.AuthCodeCallbackHandler)
 http.HandleFunc("/", oaHandler.Ensure(realRouteHandler))
 http.HandleFunc("/logout", oaHandler.ClearSessionHandler)
