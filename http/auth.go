@@ -171,6 +171,22 @@ func (h *AuthHandler) AuthCodeCallbackHandler(w http.ResponseWriter, r *http.Req
 	http.Redirect(w, r, path, http.StatusFound)
 }
 
+// ClearSessionHandler clears the okta session.
+func (h *AuthHandler) ClearSessionHandler(w http.ResponseWriter, r *http.Request) {
+	session, err := h.sessionStore.Get(r, sessionName)
+	if err != nil {
+		h.errorWriter(w, r, err, http.StatusInternalServerError)
+		return
+	}
+
+	delete(session.Values, "id_token")
+	delete(session.Values, "access_token")
+
+	session.Save(r, w)
+
+	http.Redirect(w, r, "/", http.StatusMovedPermanently)
+}
+
 func generateNonce() (string, error) {
 	nonceBytes := make([]byte, 32)
 	_, err := rand.Read(nonceBytes)
