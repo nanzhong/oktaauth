@@ -14,13 +14,14 @@ var (
     clientSecret string
     issuer       string
     redirectURI  string
-    appendPath   bool
+    preservePath bool
     errorWriter  func(w http.ResponseWriter, r *http.Request, err error, status int)
 )
 
 // ...
 
-oaHandler := NewAuthHandler(sessionKey, clientID, clientSecret, issuer, redirectURI, appendPath, errorWriter)
+oaHandler := NewAuthHandler(sessionKey, clientID, clientSecret, issuer, redirectURI, WithPreservePath(true), WithErrorWriter(errorWriter))
 http.HandleFunc("/oauth/callback", oaHandler.AuthCodeCallbackHandler)
 http.HandleFunc("/", oaHandler.Ensure(realRouteHandler))
+http.HandleFunc("/logout", oaHandler.ClearSessionHandler)
 ```
