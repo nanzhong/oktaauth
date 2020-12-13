@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/base64"
+	"encoding/gob"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"sync"
 
 	"github.com/google/uuid"
 	"github.com/gorilla/sessions"
@@ -23,12 +25,24 @@ const (
 	// IDTokenKey is the key used for id_token in session store and context injection
 	IDTokenKey key = "id_token"
 
-	sessionName                   = "okta-session"
-	sessionIDTokenKey      string = string(IDTokenKey)
-	sessionAccessTokenKey  string = "access_token"
-	sessionNonceKey        string = "nonce"
-	sessionRedirectPathKey string = "redirect_path"
+	sessionName            = "okta-session"
+	sessionIDTokenKey      = string(IDTokenKey)
+	sessionAccessTokenKey  = "access_token"
+	sessionNonceKey        = "nonce"
+	sessionRedirectPathKey = "redirect_path"
+	sessionSubjectKey      = "sub"
 )
+
+// UserInfo encodes user information.
+// TODO this is a subset of the info fields. This could be augmented if
+// documentation around the full set can be found.
+type UserInfo struct {
+	Subject           string `json:"sub"`
+	Email             string `json:"email"`
+	EmailVerified     bool   `json:"email_verified"`
+	PreferredUsername string `json:"preferred_username"`
+	Name              string `json:"name"`
+}
 
 // ErrorWriter is a function that is used to write error responses.
 type ErrorWriter func(w http.ResponseWriter, r *http.Request, err error, status int)
@@ -59,11 +73,24 @@ type AuthHandler struct {
 	redirectURI  string
 	preservePath bool
 	errorWriter  ErrorWriter
+
+	mu          sync.Mutex
+	userInfoMap map[string]*UserInfo
 }
 
-// ErrInvalidConfig is the error that will be wrapped and returned when a new
-// AuthHandler is attempted to be created with invalid configuration.
-var ErrInvalidConfig = errors.New("invalid okta configuration")
+var (
+	// ErrInvalidConfig is the error that will be wrapped and returned when a new
+	// AuthHandler is attempted to be created with invalid configuration.
+	ErrInvalidConfig = errors.New("invalid okta configuration")
+
+	// ErrInvalidSession is the error that will be wrapped and return when an
+	// invalid session is being used.
+	ErrInvalidSession = errors.New("invalid okta session")
+)
+
+func init() {
+	gob.Register(&UserInfo{})
+}
 
 // NewAuthHandler constructs a new Okta OAuth handler.
 func NewAuthHandler(sessionKey []byte, clientID, clientSecret, issuer, redirectURI string, opts ...Option) (*AuthHandler, error) {
@@ -89,6 +116,7 @@ func NewAuthHandler(sessionKey []byte, clientID, clientSecret, issuer, redirectU
 		clientSecret: clientSecret,
 		issuer:       issuer,
 		redirectURI:  redirectURI,
+		userInfoMap:  make(map[string]*UserInfo),
 
 		// Defaults.
 		errorWriter: func(w http.ResponseWriter, r *http.Request, err error, status int) {
@@ -214,6 +242,17 @@ func (h *AuthHandler) AuthCodeCallbackHandler(w http.ResponseWriter, r *http.Req
 
 	session.Values[sessionIDTokenKey] = exchange.IDToken
 	session.Values[sessionAccessTokenKey] = exchange.AccessToken
+
+	userInfo, err := h.loadUserInfo(exchange.AccessToken)
+	if err != nil {
+		h.errorWriter(w, r, err, http.StatusInternalServerError)
+		return
+	}
+	session.Values[sessionSubjectKey] = userInfo.Subject
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.userInfoMap[userInfo.Subject] = userInfo
+
 	err = session.Save(r, w)
 	if err != nil {
 		h.errorWriter(w, r, err, http.StatusInternalServerError)
@@ -230,13 +269,70 @@ func (h *AuthHandler) ClearSessionHandler(w http.ResponseWriter, r *http.Request
 		h.errorWriter(w, r, err, http.StatusInternalServerError)
 		return
 	}
+	sub, exists := session.Values[sessionSubjectKey]
+	if exists {
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		delete(h.userInfoMap, sub.(string))
+	}
 
 	delete(session.Values, "id_token")
 	delete(session.Values, "access_token")
 
-	session.Save(r, w)
+	err = session.Save(r, w)
+	if err != nil {
+		h.errorWriter(w, r, err, http.StatusInternalServerError)
+		return
+	}
 
 	http.Redirect(w, r, "/", http.StatusMovedPermanently)
+}
+
+// UserInfo returns info for the user logged into the session.
+func (h *AuthHandler) UserInfo(r *http.Request) (*UserInfo, error) {
+	session, err := h.sessionStore.Get(r, sessionName)
+	if err != nil {
+		return nil, fmt.Errorf("missing session: %w", ErrInvalidSession)
+	}
+	sub, exists := session.Values[sessionSubjectKey]
+	if !exists {
+		return nil, fmt.Errorf("missing subject: %w", ErrInvalidSession)
+	}
+
+	userInfo, exists := h.userInfoMap[sub.(string)]
+	if !exists {
+		return nil, fmt.Errorf("missing user info: %w", ErrInvalidSession)
+	}
+
+	return userInfo, nil
+}
+
+func (h *AuthHandler) loadUserInfo(accessToken string) (*UserInfo, error) {
+	req, err := http.NewRequest(http.MethodGet, fmt.Sprintf("%s/v1/userinfo", h.issuer), nil)
+	if err != nil {
+		return nil, fmt.Errorf("creating user info url: %w", err)
+	}
+	req.Header.Add("Authorization", "Bearer "+accessToken)
+	req.Header.Add("Accept", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("getting user info: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("getting user info: %d", resp.StatusCode)
+	}
+
+	m := new(UserInfo)
+	err = json.NewDecoder(resp.Body).Decode(m)
+	if err != nil {
+		return nil, fmt.Errorf("parsing user info: %w", err)
+	}
+
+	fmt.Printf("%#v\n", m)
+
+	return m, nil
 }
 
 func generateNonce() (string, error) {
