@@ -285,7 +285,7 @@ func (h *AuthHandler) ClearSessionHandler(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	http.Redirect(w, r, "/", http.StatusMovedPermanently)
+	http.Redirect(w, r, "/", http.StatusFound)
 }
 
 // UserInfo returns info for the user logged into the session.
