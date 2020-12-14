@@ -29,8 +29,4 @@ oaHandler, err := oktaauth.NewAuthHandler(sessionKey, clientID, clientSecret, is
 http.HandleFunc("/oauth/callback", oaHandler.AuthCodeCallbackHandler)
 http.HandleFunc("/", oaHandler.Ensure(realRouteHandler))
 http.HandleFunc("/logout", oaHandler.ClearSessionHandler)
-
-// ...
-
-userInfo, err := oaHandler.UserInfo(r)
 ```
