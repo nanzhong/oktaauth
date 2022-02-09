@@ -154,7 +154,7 @@ func (h *AuthHandler) Ensure(next http.Handler) http.Handler {
 		q.Add("client_id", h.clientID)
 		q.Add("response_type", "code")
 		q.Add("response_mode", "query")
-		q.Add("scope", "openid profile email")
+		q.Add("scope", "openid profile email groups")
 		q.Add("redirect_uri", h.redirectURI)
 		q.Add("state", uuid.New().String())
 		q.Add("nonce", nonce)
