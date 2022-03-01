@@ -25,7 +25,6 @@ const (
 
 	sessionName            = "okta-session"
 	sessionIDTokenKey      = string(IDTokenKey)
-	sessionAccessTokenKey  = "access_token"
 	sessionNonceKey        = "nonce"
 	sessionRedirectPathKey = "redirect_path"
 )
@@ -219,7 +218,6 @@ func (h *AuthHandler) AuthCodeCallbackHandler(w http.ResponseWriter, r *http.Req
 	}
 
 	session.Values[sessionIDTokenKey] = exchange.IDToken
-	session.Values[sessionAccessTokenKey] = exchange.AccessToken
 
 	err = session.Save(r, w)
 	if err != nil {
